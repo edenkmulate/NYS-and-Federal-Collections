@@ -206,8 +206,7 @@ def render_dashboard_charts(
     selected_types: list,
     cal_year_col: str,
     cal_month_col: str,
-    fiscal_year_col: str,
-    fiscal_month_order_col: str,
+    fy_start_month: int,  # 10 for Federal (Oct), 4 for NYS (Apr)
     key_prefix: str,
     title_prefix: str
 ):
@@ -217,7 +216,6 @@ def render_dashboard_charts(
       Row 2: Calendar Year-to-Date Cumulative (Line) + CYTD YoY Growth % (Bar)
       Row 3: Fiscal Year-to-Date Cumulative (Line) + FYTD YoY Growth % (Bar)
     """
-    # 1. Filter by selected tax categories/types across ALL years (for historical series)
     cat_mask = full_df[category_col].isin(selected_categories) if selected_categories else True
     type_mask = full_df[type_col].isin(selected_types) if selected_types else True
     series_df = full_df[cat_mask & type_mask].copy()
@@ -226,11 +224,17 @@ def render_dashboard_charts(
         st.info(f"No {title_prefix} records match the selected categories.")
         return
 
-    # Determine target month (if "All Months" is selected, use the latest month in selected_year)
+    # Dynamically compute Fiscal Year and Fiscal Month Order (1 to 12)
+    # Federal (fy_start_month=10): Oct=1, Nov=2, ..., Sep=12
+    # NYS (fy_start_month=4): Apr=1, May=2, ..., Mar=12
+    series_df["_calc_f_month_ord"] = ((series_df["month_num"] - fy_start_month) % 12) + 1
+    series_df["_calc_fy"] = series_df[cal_year_col] + (series_df["month_num"] >= fy_start_month).astype(int)
+
+    # Determine target month
     year_subset = series_df[series_df[cal_year_col] == selected_year]
     if selected_month != "All Months":
         target_month_name = selected_month
-        target_month_num = series_df.loc[series_df[cal_month_col] == selected_month, "month_num"].iloc[0]
+        target_month_num = int(series_df.loc[series_df[cal_month_col] == selected_month, "month_num"].iloc[0])
     else:
         if not year_subset.empty:
             latest_row = year_subset.sort_values("month_num").iloc[-1]
@@ -328,7 +332,6 @@ def render_dashboard_charts(
     
     cytd_raw = series_df[series_df["month_num"] <= target_month_num].copy()
     
-    # Monthly cumulative trajectory for every calendar year in series
     cytd_monthly = (
         cytd_raw.groupby([cal_year_col, "month_num", cal_month_col], as_index=False)["amount"]
         .sum()
@@ -337,7 +340,6 @@ def render_dashboard_charts(
     cytd_monthly["cytd_cumulative"] = cytd_monthly.groupby(cal_year_col)["amount"].cumsum()
     cytd_monthly[cal_year_col] = cytd_monthly[cal_year_col].astype(str)
 
-    # Annual CYTD total for YoY growth bar chart
     cytd_annual = (
         cytd_raw.groupby(cal_year_col, as_index=False)["amount"]
         .sum()
@@ -374,69 +376,65 @@ def render_dashboard_charts(
         st.plotly_chart(fig_cytd_yoy, use_container_width=True, key=f"{key_prefix}_r2_yoy")
 
     st.divider()
+
     # ==========================================================================
     # ROW 3: FISCAL YEAR-TO-DATE (FYTD) LINE CHART & GROWTH RATE BAR CHART
     # ==========================================================================
-    ref_rows = series_df[
-        (series_df[cal_year_col] == selected_year) & 
-        (series_df["month_num"] == target_month_num)
-    ].dropna(subset=[fiscal_year_col, fiscal_month_order_col])
+    target_f_month_ord = ((target_month_num - fy_start_month) % 12) + 1
+    target_fy = int(selected_year + (1 if target_month_num >= fy_start_month else 0))
+
+    st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} — {target_month_name} / FY {target_fy})")
     
-    if not ref_rows.empty:
-        # Use .iloc[0] to extract the scalar value from the Series
-        target_fy = int(ref_rows[fiscal_year_col].iloc[0])
-        target_f_month_ord = int(ref_rows[fiscal_month_order_col].iloc[0])
-        
-        st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} — {target_month_name} / FY {target_fy})")
-        
-        fytd_raw = series_df[series_df[fiscal_month_order_col] <= target_f_month_ord].copy()
-        
-        fytd_monthly = (
-            fytd_raw.groupby([fiscal_year_col, fiscal_month_order_col, cal_month_col], as_index=False)["amount"]
-            .sum()
-            .sort_values([fiscal_year_col, fiscal_month_order_col])
+    fytd_raw = series_df[series_df["_calc_f_month_ord"] <= target_f_month_ord].copy()
+    
+    fytd_monthly = (
+        fytd_raw.groupby(["_calc_fy", "_calc_f_month_ord", cal_month_col], as_index=False)["amount"]
+        .sum()
+        .sort_values(["_calc_fy", "_calc_f_month_ord"])
+    )
+    fytd_monthly["fytd_cumulative"] = fytd_monthly.groupby("_calc_fy")["amount"].cumsum()
+    fytd_monthly["_calc_fy"] = fytd_monthly["_calc_fy"].astype(str)
+
+    fytd_annual = (
+        fytd_raw.groupby("_calc_fy", as_index=False)["amount"]
+        .sum()
+        .sort_values("_calc_fy")
+    )
+    fytd_annual["fytd_yoy_pct"] = fytd_annual["amount"].pct_change() * 100
+    fytd_annual["_calc_fy"] = fytd_annual["_calc_fy"].astype(str)
+
+    r3_c1, r3_c2 = st.columns(2)
+    with r3_c1:
+        fig_fytd_line = px.line(
+            fytd_monthly,
+            x="_calc_f_month_ord",
+            y="fytd_cumulative",
+            color="_calc_fy",
+            markers=True,
+            title=f"Cumulative Fiscal YTD Collections by FY (Thru Fiscal Month {target_f_month_ord})",
+            labels={
+                "_calc_f_month_ord": f"Fiscal Month Order (1 = Month {fy_start_month})",
+                "fytd_cumulative": "Cumulative FYTD ($)",
+                "_calc_fy": "Fiscal Year"
+            }
         )
-        fytd_monthly["fytd_cumulative"] = fytd_monthly.groupby(fiscal_year_col)["amount"].cumsum()
-        fytd_monthly[fiscal_year_col] = fytd_monthly[fiscal_year_col].astype(str)
+        st.plotly_chart(fig_fytd_line, use_container_width=True, key=f"{key_prefix}_r3_line")
 
-        fytd_annual = (
-            fytd_raw.groupby(fiscal_year_col, as_index=False)["amount"]
-            .sum()
-            .sort_values(fiscal_year_col)
+    with r3_c2:
+        fig_fytd_yoy = px.bar(
+            fytd_annual.dropna(subset=["fytd_yoy_pct"]),
+            x="_calc_fy",
+            y="fytd_yoy_pct",
+            title=f"Fiscal YTD YoY Growth Rate (Thru Fiscal Month {target_f_month_ord}) (%)",
+            labels={"_calc_fy": "Fiscal Year", "fytd_yoy_pct": "FYTD Growth (%)"},
+            color="fytd_yoy_pct",
+            color_continuous_scale=["#d9534f", "#f0ad4e", "#5cb85c"],
+            color_continuous_midpoint=0
         )
-        fytd_annual["fytd_yoy_pct"] = fytd_annual["amount"].pct_change() * 100
-        fytd_annual[fiscal_year_col] = fytd_annual[fiscal_year_col].astype(str)
-
-        r3_c1, r3_c2 = st.columns(2)
-        with r3_c1:
-            fig_fytd_line = px.line(
-                fytd_monthly,
-                x=fiscal_month_order_col,
-                y="fytd_cumulative",
-                color=fiscal_year_col,
-                markers=True,
-                title=f"Cumulative Fiscal YTD Collections by FY (Thru Fiscal Month {target_f_month_ord})",
-                labels={
-                    fiscal_month_order_col: "Fiscal Month Order (1 = Start of FY)",
-                    "fytd_cumulative": "Cumulative FYTD ($)",
-                    fiscal_year_col: "Fiscal Year"
-                }
-            )
-            st.plotly_chart(fig_fytd_line, use_container_width=True, key=f"{key_prefix}_r3_line")
-
-        with r3_c2:
-            fig_fytd_yoy = px.bar(
-                fytd_annual.dropna(subset=["fytd_yoy_pct"]),
-                x=fiscal_year_col,
-                y="fytd_yoy_pct",
-                title=f"Fiscal YTD YoY Growth Rate (Thru Fiscal Month {target_f_month_ord}) (%)",
-                labels={fiscal_year_col: "Fiscal Year", "fytd_yoy_pct": "FYTD Growth (%)"},
-                color="fytd_yoy_pct",
-                color_continuous_scale=["#d9534f", "#f0ad4e", "#5cb85c"],
-                color_continuous_midpoint=0
-            )
-            fig_fytd_yoy.update_coloraxes(showscale=False)
-            st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
+        fig_fytd_yoy.update_coloraxes(showscale=False)
+        st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
+    with st.expander(f"View Underlying {title_prefix} Data Table"):
+    st.dataframe(series_df.drop(columns=["_calc_f_month_ord", "_calc_fy"]).sort_values("record_date", ascending=False), use_container_width=True)
 # ==============================================================================
 # 3. MAIN TAB NAVIGATION
 # ==============================================================================
