@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🏦 Government Tax Receipts Dashboard")
+st.title("Government Tax Collections Dashboard")
 st.markdown("Interactive analysis of **Federal (U.S. Treasury)** and **New York State** revenue collections.")
 
 # ==============================================================================
