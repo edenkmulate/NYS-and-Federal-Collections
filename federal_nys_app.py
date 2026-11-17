@@ -559,7 +559,7 @@ with tab_nys:
         st.stop()
 
     st.subheader("🎛️ NYS Dashboard Slicers")
-    n_col1, n_col2, n_col3 = st.columns()
+    n_col1, n_col2, n_col3 = st.columns([1, 1, 2])
 
     nys_years = sorted(nys_df['calendar_year'].dropna().unique().tolist(), reverse=True)
     min_nys_yr, max_nys_yr = int(min(nys_years)), int(max(nys_years))
