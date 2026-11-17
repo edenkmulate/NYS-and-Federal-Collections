@@ -80,7 +80,8 @@ def load_federal_data():
 
 @st.cache_data(ttl=86400, show_spinner="Fetching NYS Tax Collections from NY Open Data...")
 def load_nys_data():
-    api_url = "https://ny.gov"
+    api_url = "https://data.ny.gov/resource/2vni-8tmb.json"
+
     limit = 10000
     offset = 0
     all_records = []
@@ -89,25 +90,31 @@ def load_nys_data():
         params = {
             "$limit": limit,
             "$offset": offset,
-            "$order": ":id"
+            "$order": ":id"  # Keeps row order consistent across pages
         }
+        
         response = requests.get(api_url, params=params, timeout=30)
         response.raise_for_status()
+        
         batch = response.json()
-
+        
+        # Stop when the API returns an empty list
         if not batch:
             break
-
+            
         all_records.extend(batch)
-
+        
+        # Stop early if this batch is smaller than the limit (last page)
         if len(batch) < limit:
             break
-
+            
         offset += limit
-        time.sleep(0.25)
+        time.sleep(0.25)  # Brief pause to respect API rate limits
 
-    mod_df = pd.DataFrame(all_records)
+    # Load into DataFrame
+    df = pd.DataFrame(all_records)
 
+    # Convert numeric columns from strings to actual numbers
     numeric_cols = [
         "fiscal_year_ending",
         "amount_collected_in_thousands",
@@ -115,10 +122,14 @@ def load_nys_data():
         "tax_type_sort_order",
         "tax_or_fee_sort_order"
     ]
-    for col in numeric_cols:
-        if col in mod_df.columns:
-            mod_df[col] = pd.to_numeric(mod_df[col], errors="coerce")
 
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    mod_df = df.copy()
+
+    # Dictionary to map 3-letter month abbreviations to month numbers
     month_map = {
         "jan": 1, "feb": 2, "mar": 3, "apr": 4,
         "may": 5, "jun": 6, "jul": 7, "aug": 8,
@@ -128,46 +139,56 @@ def load_nys_data():
     def standardize_ny_date(date_str):
         if pd.isna(date_str) or str(date_str).strip() == "":
             return None, None
-
+            
         val = str(date_str).strip()
-
+        
+        # 1. Historical Format Rule: Contains a hyphen (e.g., Sep-23 to earliest)
         if "-" in val:
             parts = val.split("-")
-            month_part = parts.strip().lower()[:3]
-            year_part = parts.strip()
+            month_part = parts[0].strip().lower()[:3]  # Slice first 3 chars (handles "Sept")
+            year_part = parts[1].strip()
+            
             calendar_month = month_map.get(month_part)
-
+            
+            # Standardize 2-digit years to 4-digit years (data starts in 1996)
             if len(year_part) == 2 and year_part.isdigit():
                 calendar_year = int("19" + year_part if int(year_part) >= 96 else "20" + year_part)
             else:
                 calendar_year = int(year_part) if year_part.isdigit() else None
-
+                
             return calendar_year, calendar_month
+
+        # 2. Modern Format Rule: October 2023 to now (e.g., "October 2023")
         else:
             year_part = val[-4:].strip()
-            month_part = val[:-4].strip().lower()[:3]
+            month_part = val[:-4].strip().lower()[:3]  # Converts "October" -> "oct"
+            
             calendar_year = int(year_part) if year_part.isdigit() else None
             calendar_month = month_map.get(month_part)
-
+            
             return calendar_year, calendar_month
 
     if "month_of_collections" in mod_df.columns:
         parsed_dates = mod_df["month_of_collections"].apply(standardize_ny_date)
-        mod_df["calendar_year"] = pd.Series([x for x in parsed_dates], index=mod_df.index, dtype="Int64")
-        mod_df["month_num"] = pd.Series([x for x in parsed_dates], index=mod_df.index, dtype="Int64")
         
-        # Add full month name ('January', 'February', etc.) to match Federal slicer UX
-        mod_df["calendar_month_name"] = mod_df["month_num"].apply(
+        # Use Int64 so pandas preserves integers even if there are None/NaN values
+        mod_df["calendar_year"] = pd.Series([x[0] for x in parsed_dates], index=mod_df.index, dtype="Int64")
+        mod_df["calendar_month"] = pd.Series([x[1] for x in parsed_dates], index=mod_df.index, dtype="Int64")
+        
+        # Compatibility columns required by Tab 2 slicers and Plotly charts
+        mod_df["month_num"] = mod_df["calendar_month"]
+        mod_df["calendar_month_name"] = mod_df["calendar_month"].apply(
             lambda m: calendar.month_name[int(m)] if pd.notna(m) and 1 <= int(m) <= 12 else None
         )
-        # Create a proper datetime column for chronological plotting
         mod_df["record_date"] = pd.to_datetime(
-            dict(year=mod_df["calendar_year"], month=mod_df["month_num"], day=1),
+            dict(year=mod_df["calendar_year"], month=mod_df["calendar_month"], day=1),
             errors="coerce"
         )
 
-    # Convert thousands to actual dollars and rename columns
-    mod_df["amount_collected_in_thousands"] = mod_df["amount_collected_in_thousands"] * 1000
+    # Convert to numeric, multiply by 1000, and rename to 'amount'
+    mod_df["amount_collected_in_thousands"] = (
+        pd.to_numeric(mod_df["amount_collected_in_thousands"], errors="coerce") * 1000
+    )
     mod_df = mod_df.rename(columns={
         "amount_collected_in_thousands": "amount",
         "fiscal_year_ending": "nys_fiscal_year"
