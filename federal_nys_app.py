@@ -195,13 +195,255 @@ def load_nys_data():
     })
 
     return mod_df
+
+def render_dashboard_charts(
+    full_df: pd.DataFrame,
+    selected_year: int,
+    selected_month: str,
+    category_col: str,
+    selected_categories: list,
+    type_col: str,
+    selected_types: list,
+    cal_year_col: str,
+    cal_month_col: str,
+    fiscal_year_col: str,
+    fiscal_month_order_col: str,
+    key_prefix: str,
+    title_prefix: str
+):
+    """
+    Renders the 3-row (6-chart) historical & YTD analytical layout:
+      Row 1: Historical Selected Month Collections (Bar) + YoY Growth % (Bar)
+      Row 2: Calendar Year-to-Date Cumulative (Line) + CYTD YoY Growth % (Bar)
+      Row 3: Fiscal Year-to-Date Cumulative (Line) + FYTD YoY Growth % (Bar)
+    """
+    # 1. Filter by selected tax categories/types across ALL years (for historical series)
+    cat_mask = full_df[category_col].isin(selected_categories) if selected_categories else True
+    type_mask = full_df[type_col].isin(selected_types) if selected_types else True
+    series_df = full_df[cat_mask & type_mask].copy()
+
+    if series_df.empty:
+        st.info(f"No {title_prefix} records match the selected categories.")
+        return
+
+    # Determine target month (if "All Months" is selected, use the latest month in selected_year)
+    year_subset = series_df[series_df[cal_year_col] == selected_year]
+    if selected_month != "All Months":
+        target_month_name = selected_month
+        target_month_num = series_df.loc[series_df[cal_month_col] == selected_month, "month_num"].iloc[0]
+    else:
+        if not year_subset.empty:
+            latest_row = year_subset.sort_values("month_num").iloc[-1]
+            target_month_name = latest_row[cal_month_col]
+            target_month_num = int(latest_row["month_num"])
+        else:
+            st.info(f"No data available for {selected_year}.")
+            return
+
+    # --------------------------------------------------------------------------
+    # KPI SUMMARY ROW
+    # --------------------------------------------------------------------------
+    st.markdown(f"### 📊 {title_prefix} Key Summary Metrics ({target_month_name} {selected_year})")
+    
+    curr_m_val = series_df[
+        (series_df[cal_year_col] == selected_year) & 
+        (series_df["month_num"] == target_month_num)
+    ]["amount"].sum()
+    
+    prev_m_val = series_df[
+        (series_df[cal_year_col] == selected_year - 1) & 
+        (series_df["month_num"] == target_month_num)
+    ]["amount"].sum()
+
+    yoy_diff_m = (curr_m_val - prev_m_val) / 1_000_000 if prev_m_val != 0 else None
+    yoy_pct = ((curr_m_val - prev_m_val) / abs(prev_m_val) * 100) if prev_m_val != 0 else None
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric(
+        label=f"{target_month_name} {selected_year} Collections",
+        value=f"${curr_m_val / 1_000_000:,.1f}M",
+        delta=f"${yoy_diff_m:,.1f}M ({yoy_pct:+.1f}%) Y/Y" if yoy_diff_m is not None else None
+    )
+    
+    cytd_curr = series_df[
+        (series_df[cal_year_col] == selected_year) & 
+        (series_df["month_num"] <= target_month_num)
+    ]["amount"].sum()
+    k2.metric(
+        label=f"Calendar YTD (Jan–{target_month_name[:3]} {selected_year})",
+        value=f"${cytd_curr / 1_000_000:,.1f}M"
+    )
+    k3.metric(
+        label="Selected Categories",
+        value=series_df[category_col].nunique()
+    )
+
+    st.divider()
+
+    # ==========================================================================
+    # ROW 1: HISTORICAL SINGLE-MONTH COLLECTIONS & YOY GROWTH RATE
+    # ==========================================================================
+    st.markdown(f"#### 1️⃣ Historical {target_month_name} Collections & YoY Growth")
+    
+    hist_month_df = (
+        series_df[series_df["month_num"] == target_month_num]
+        .groupby(cal_year_col, as_index=False)["amount"]
+        .sum()
+        .sort_values(cal_year_col)
+    )
+    hist_month_df["yoy_growth_pct"] = hist_month_df["amount"].pct_change() * 100
+    hist_month_df[cal_year_col] = hist_month_df[cal_year_col].astype(str)
+
+    r1_c1, r1_c2 = st.columns(2)
+    with r1_c1:
+        fig_m_amt = px.bar(
+            hist_month_df,
+            x=cal_year_col,
+            y="amount",
+            title=f"{target_month_name} Collections Across All Years ($)",
+            labels={cal_year_col: "Calendar Year", "amount": "Collections ($)"}
+        )
+        st.plotly_chart(fig_m_amt, use_container_width=True, key=f"{key_prefix}_r1_amt")
+
+    with r1_c2:
+        fig_m_yoy = px.bar(
+            hist_month_df.dropna(subset=["yoy_growth_pct"]),
+            x=cal_year_col,
+            y="yoy_growth_pct",
+            title=f"{target_month_name} Year-over-Year Growth Rate (%)",
+            labels={cal_year_col: "Calendar Year", "yoy_growth_pct": "YoY Growth (%)"},
+            color="yoy_growth_pct",
+            color_continuous_scale=["#d9534f", "#f0ad4e", "#5cb85c"],
+            color_continuous_midpoint=0
+        )
+        fig_m_yoy.update_coloraxes(showscale=False)
+        st.plotly_chart(fig_m_yoy, use_container_width=True, key=f"{key_prefix}_r1_yoy")
+
+    st.divider()
+
+    # ==========================================================================
+    # ROW 2: CALENDAR YEAR-TO-DATE (CYTD) LINE CHART & GROWTH RATE BAR CHART
+    # ==========================================================================
+    st.markdown(f"#### 2️⃣ Calendar Year-to-Date (Jan – {target_month_name})")
+    
+    cytd_raw = series_df[series_df["month_num"] <= target_month_num].copy()
+    
+    # Monthly cumulative trajectory for every calendar year in series
+    cytd_monthly = (
+        cytd_raw.groupby([cal_year_col, "month_num", cal_month_col], as_index=False)["amount"]
+        .sum()
+        .sort_values([cal_year_col, "month_num"])
+    )
+    cytd_monthly["cytd_cumulative"] = cytd_monthly.groupby(cal_year_col)["amount"].cumsum()
+    cytd_monthly[cal_year_col] = cytd_monthly[cal_year_col].astype(str)
+
+    # Annual CYTD total for YoY growth bar chart
+    cytd_annual = (
+        cytd_raw.groupby(cal_year_col, as_index=False)["amount"]
+        .sum()
+        .sort_values(cal_year_col)
+    )
+    cytd_annual["cytd_yoy_pct"] = cytd_annual["amount"].pct_change() * 100
+    cytd_annual[cal_year_col] = cytd_annual[cal_year_col].astype(str)
+
+    r2_c1, r2_c2 = st.columns(2)
+    with r2_c1:
+        fig_cytd_line = px.line(
+            cytd_monthly,
+            x="month_num",
+            y="cytd_cumulative",
+            color=cal_year_col,
+            markers=True,
+            title=f"Cumulative Calendar YTD Collections by Year (Thru {target_month_name})",
+            labels={"month_num": "Calendar Month (1=Jan)", "cytd_cumulative": "Cumulative YTD ($)", cal_year_col: "Year"}
+        )
+        st.plotly_chart(fig_cytd_line, use_container_width=True, key=f"{key_prefix}_r2_line")
+
+    with r2_c2:
+        fig_cytd_yoy = px.bar(
+            cytd_annual.dropna(subset=["cytd_yoy_pct"]),
+            x=cal_year_col,
+            y="cytd_yoy_pct",
+            title=f"Calendar YTD YoY Growth Rate (Jan–{target_month_name[:3]}) (%)",
+            labels={cal_year_col: "Calendar Year", "cytd_yoy_pct": "CYTD Growth (%)"},
+            color="cytd_yoy_pct",
+            color_continuous_scale=["#d9534f", "#f0ad4e", "#5cb85c"],
+            color_continuous_midpoint=0
+        )
+        fig_cytd_yoy.update_coloraxes(showscale=False)
+        st.plotly_chart(fig_cytd_yoy, use_container_width=True, key=f"{key_prefix}_r2_yoy")
+
+    st.divider()
+ # ==========================================================================
+    # ROW 3: FISCAL YEAR-TO-DATE (FYTD) LINE CHART & GROWTH RATE BAR CHART
+    # ==========================================================================
+    # Find the fiscal year & fiscal month order corresponding to the selected year/month
+    ref_rows = series_df[
+        (series_df[cal_year_col] == selected_year) & 
+        (series_df["month_num"] == target_month_num)
+    ]
+    
+    if not ref_rows.empty and fiscal_year_col in series_df.columns and fiscal_month_order_col in series_df.columns:
+        target_fy = int(ref_rows[fiscal_year_col].iloc)
+        target_f_month_ord = int(ref_rows[fiscal_month_order_col].iloc)
+        
+        st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} — {target_month_name} / FY {target_fy})")
+        
+        fytd_raw = series_df[series_df[fiscal_month_order_col] <= target_f_month_ord].copy()
+        
+        fytd_monthly = (
+            fytd_raw.groupby([fiscal_year_col, fiscal_month_order_col, cal_month_col], as_index=False)["amount"]
+            .sum()
+            .sort_values([fiscal_year_col, fiscal_month_order_col])
+        )
+        fytd_monthly["fytd_cumulative"] = fytd_monthly.groupby(fiscal_year_col)["amount"].cumsum()
+        fytd_monthly[fiscal_year_col] = fytd_monthly[fiscal_year_col].astype(str)
+
+        fytd_annual = (
+            fytd_raw.groupby(fiscal_year_col, as_index=False)["amount"]
+            .sum()
+            .sort_values(fiscal_year_col)
+        )
+        fytd_annual["fytd_yoy_pct"] = fytd_annual["amount"].pct_change() * 100
+        fytd_annual[fiscal_year_col] = fytd_annual[fiscal_year_col].astype(str)
+
+        r3_c1, r3_c2 = st.columns(2)
+        with r3_c1:
+            fig_fytd_line = px.line(
+                fytd_monthly,
+                x=fiscal_month_order_col,
+                y="fytd_cumulative",
+                color=fiscal_year_col,
+                markers=True,
+                title=f"Cumulative Fiscal YTD Collections by FY (Thru Fiscal Month {target_f_month_ord})",
+                labels={
+                    fiscal_month_order_col: "Fiscal Month Order (1 = Start of FY)",
+                    "fytd_cumulative": "Cumulative FYTD ($)",
+                    fiscal_year_col: "Fiscal Year"
+                }
+            )
+            st.plotly_chart(fig_fytd_line, use_container_width=True, key=f"{key_prefix}_r3_line")
+
+        with r3_c2:
+            fig_fytd_yoy = px.bar(
+                fytd_annual.dropna(subset=["fytd_yoy_pct"]),
+                x=fiscal_year_col,
+                y="fytd_yoy_pct",
+                title=f"Fiscal YTD YoY Growth Rate (Thru Fiscal Month {target_f_month_ord}) (%)",
+                labels={fiscal_year_col: "Fiscal Year", "fytd_yoy_pct": "FYTD Growth (%)"},
+                color="fytd_yoy_pct",
+                color_continuous_scale=["#d9534f", "#f0ad4e", "#5cb85c"],
+                color_continuous_midpoint=0
+            )
+            fig_fytd_yoy.update_coloraxes(showscale=False)
+            st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
 # ==============================================================================
 # 3. MAIN TAB NAVIGATION
 # ==============================================================================
 tab_fed, tab_nys = st.tabs(["🇺🇸 Federal Treasury Receipts", "🗽 New York State Collections"])
 
 # ------------------------------------------------------------------------------
-# TAB 1: FEDERAL TREASURY RECEIPTS (Your Original Dashboard Logic)
+# TAB 1: FEDERAL TREASURY RECEIPTS
 # ------------------------------------------------------------------------------
 with tab_fed:
     df = load_federal_data()
@@ -219,14 +461,13 @@ with tab_fed:
 
     year_filtered_df = df[df['record_calendar_year'] == selected_year]
     unique_months_df = year_filtered_df[['record_calendar_month', 'month_num']].drop_duplicates().sort_values('month_num')
-    all_months = unique_months_df['record_calendar_month'].tolist()
-    month_options = ["All Months"] + all_months
+    month_options = ["All Months"] + unique_months_df['record_calendar_month'].tolist()
 
     with f_col2:
         selected_month = st.selectbox("Select Calendar Month", options=month_options, index=0, key="fed_month")
 
     all_classifications = sorted(df['classification_desc'].dropna().unique().tolist())
-    class_default = ["Corporation Income Taxes"] if "Corporation Income Taxes" in all_classifications else ([all_classifications[0]] if all_classifications else [])
+    class_default = ["Corporation Income Taxes"] if "Corporation Income Taxes" in all_classifications else ([all_classifications] if all_classifications else [])
 
     with f_col3:
         selected_classifications = st.multiselect(
@@ -247,74 +488,21 @@ with tab_fed:
             key="fed_rcpt"
         )
 
-    filter_mask = (
-        (df['record_calendar_year'] == selected_year) &
-        (df['classification_desc'].isin(selected_classifications if selected_classifications else all_classifications)) &
-        (df['receipt_type'].isin(selected_receipt_types if selected_receipt_types else all_receipt_types))
+    render_dashboard_charts(
+        full_df=df,
+        selected_year=selected_year,
+        selected_month=selected_month,
+        category_col="classification_desc",
+        selected_categories=selected_classifications if selected_classifications else all_classifications,
+        type_col="receipt_type",
+        selected_types=selected_receipt_types if selected_receipt_types else all_receipt_types,
+        cal_year_col="record_calendar_year",
+        cal_month_col="record_calendar_month",
+        fiscal_year_col="record_fiscal_year",
+        fiscal_month_order_col="fiscal_month_order",
+        key_prefix="fed",
+        title_prefix="Federal"
     )
-    if selected_month != "All Months":
-        filter_mask = filter_mask & (df['record_calendar_month'] == selected_month)
-
-    filtered_df = df[filter_mask]
-
-    st.markdown("### 📊 Federal Key Summary Metrics")
-    if not filtered_df.empty:
-        avg_monthly_receipts = filtered_df.groupby(['record_calendar_year', 'record_calendar_month'])['amount'].sum().mean()
-        unique_classes = filtered_df['classification_desc'].nunique()
-
-        if selected_month != "All Months":
-            target_month_name = selected_month
-            target_year = selected_year
-            target_df = filtered_df
-            label_suffix = f" ({target_month_name} {target_year})"
-        else:
-            latest_date = filtered_df['record_date'].max()
-            target_month_name = latest_date.strftime('%B')
-            target_year = latest_date.year
-            target_df = filtered_df[filtered_df['record_calendar_month'] == target_month_name]
-            label_suffix = f" (Latest: {target_month_name} {target_year})"
-
-        total_receipts_m = target_df['amount'].sum() / 1_000_000
-
-        prev_year = target_year - 1
-        prev_year_month_df = df[
-            (df['record_date'].dt.year == prev_year) &
-            (df['record_date'].dt.strftime('%B') == target_month_name) &
-            (df['classification_desc'].isin(selected_classifications if selected_classifications else all_classifications)) &
-            (df['receipt_type'].isin(selected_receipt_types if selected_receipt_types else all_receipt_types))
-        ]
-        prev_receipts_m = prev_year_month_df['amount'].sum() / 1_000_000
-        yoy_delta_m = total_receipts_m - prev_receipts_m if not prev_year_month_df.empty else None
-
-        k1, k2, k3 = st.columns(3)
-        k1.metric(
-            label=f"Total Receipts{label_suffix}",
-            value=f"${total_receipts_m:,.1f}M",
-            delta=f"${yoy_delta_m:,.1f}M Y/Y" if yoy_delta_m is not None else None
-        )
-        k2.metric(label="Avg Monthly Receipts (Selected Period)", value=f"${avg_monthly_receipts / 1_000_000:,.1f}M")
-        k3.metric(label="Selected Classifications", value=unique_classes)
-
-        # Monthly Trend Chart
-        trend_df = (
-            filtered_df.groupby(['record_date', 'classification_desc'], as_index=False)['amount']
-            .sum()
-            .sort_values('record_date')
-        )
-        fig_fed = px.bar(
-            trend_df,
-            x='record_date',
-            y='amount',
-            color='classification_desc',
-            title=f"Federal Monthly Receipts ({selected_year})",
-            labels={'amount': 'Amount ($)', 'record_date': 'Month', 'classification_desc': 'Classification'}
-        )
-        st.plotly_chart(fig_fed, use_container_width=True)
-
-        with st.expander("View Raw Federal Data"):
-            st.dataframe(filtered_df, use_container_width=True)
-    else:
-        st.info("No Federal records match the current filter selection.")
 
 # ------------------------------------------------------------------------------
 # TAB 2: NEW YORK STATE COLLECTIONS
@@ -341,7 +529,7 @@ with tab_nys:
         sel_nys_month = st.selectbox("Select Calendar Month", options=nys_month_options, index=0, key="nys_month")
 
     all_tax_types = sorted(nys_df['tax_type'].dropna().unique().tolist())
-    default_tax_type = ["Personal Income Tax"] if "Personal Income Tax" in all_tax_types else ([all_tax_types[0]] if all_tax_types else [])
+    default_tax_type = ["Personal Income Tax"] if "Personal Income Tax" in all_tax_types else ([all_tax_types] if all_tax_types else [])
 
     with n_col3:
         sel_tax_types = st.multiselect(
@@ -351,12 +539,9 @@ with tab_nys:
             key="nys_tax_type"
         )
 
-    # Filter available specific Tax/Fee lines based on selected Tax Type
     available_fees_df = nys_df[nys_df['tax_type'].isin(sel_tax_types if sel_tax_types else all_tax_types)]
     all_taxes_fees = sorted(available_fees_df['tax_or_fee'].dropna().unique().tolist())
-    
-    # Pre-select "Net Collections" if available so subtotals don't double-count
-    default_fee = ["Net Collections"] if "Net Collections" in all_taxes_fees else ([all_taxes_fees[0]] if all_taxes_fees else [])
+    default_fee = ["Net Collections"] if "Net Collections" in all_taxes_fees else ([all_taxes_fees] if all_taxes_fees else [])
 
     with n_col4:
         sel_taxes_fees = st.multiselect(
@@ -366,70 +551,18 @@ with tab_nys:
             key="nys_tax_fee"
         )
 
-    nys_mask = (
-        (nys_df['calendar_year'] == sel_nys_year) &
-        (nys_df['tax_type'].isin(sel_tax_types if sel_tax_types else all_tax_types)) &
-        (nys_df['tax_or_fee'].isin(sel_taxes_fees if sel_taxes_fees else all_taxes_fees))
+    render_dashboard_charts(
+        full_df=nys_df,
+        selected_year=sel_nys_year,
+        selected_month=sel_nys_month,
+        category_col="tax_type",
+        selected_categories=sel_tax_types if sel_tax_types else all_tax_types,
+        type_col="tax_or_fee",
+        selected_types=sel_taxes_fees if sel_taxes_fees else all_taxes_fees,
+        cal_year_col="calendar_year",
+        cal_month_col="calendar_month_name",
+        fiscal_year_col="nys_fiscal_year",
+        fiscal_month_order_col="month_of_collections_sort_order",
+        key_prefix="nys",
+        title_prefix="NYS"
     )
-    if sel_nys_month != "All Months":
-        nys_mask = nys_mask & (nys_df['calendar_month_name'] == sel_nys_month)
-
-    filtered_nys = nys_df[nys_mask]
-
-    st.markdown("### 📊 NYS Key Summary Metrics")
-    if not filtered_nys.empty:
-        nys_avg_monthly = filtered_nys.groupby(['calendar_year', 'month_num'])['amount'].sum().mean()
-        nys_unique_items = filtered_nys['tax_or_fee'].nunique()
-
-        if sel_nys_month != "All Months":
-            nys_target_month = sel_nys_month
-            nys_target_df = filtered_nys
-            nys_suffix = f" ({nys_target_month} {sel_nys_year})"
-        else:
-            latest_nys_date = filtered_nys['record_date'].max()
-            nys_target_month = latest_nys_date.strftime('%B')
-            nys_target_df = filtered_nys[filtered_nys['calendar_month_name'] == nys_target_month]
-            nys_suffix = f" (Latest: {nys_target_month} {sel_nys_year})"
-
-        nys_total_m = nys_target_df['amount'].sum() / 1_000_000
-
-        # Year-over-Year comparison for NYS
-        nys_prev_year = sel_nys_year - 1
-        nys_prev_df = nys_df[
-            (nys_df['calendar_year'] == nys_prev_year) &
-            (nys_df['calendar_month_name'] == nys_target_month) &
-            (nys_df['tax_type'].isin(sel_tax_types if sel_tax_types else all_tax_types)) &
-            (nys_df['tax_or_fee'].isin(sel_taxes_fees if sel_taxes_fees else all_taxes_fees))
-        ]
-        nys_prev_m = nys_prev_df['amount'].sum() / 1_000_000
-        nys_yoy_m = nys_total_m - nys_prev_m if not nys_prev_df.empty else None
-
-        nk1, nk2, nk3 = st.columns(3)
-        nk1.metric(
-            label=f"Total NYS Collections{nys_suffix}",
-            value=f"${nys_total_m:,.1f}M",
-            delta=f"${nys_yoy_m:,.1f}M Y/Y" if nys_yoy_m is not None else None
-        )
-        nk2.metric(label="Avg Monthly Collections (Selected Period)", value=f"${nys_avg_monthly / 1_000_000:,.1f}M")
-        nk3.metric(label="Selected Tax/Fee Lines", value=nys_unique_items)
-
-        # Monthly Trend Chart for NYS
-        nys_trend_df = (
-            filtered_nys.groupby(['record_date', 'tax_or_fee'], as_index=False)['amount']
-            .sum()
-            .sort_values('record_date')
-        )
-        fig_nys = px.bar(
-            nys_trend_df,
-            x='record_date',
-            y='amount',
-            color='tax_or_fee',
-            title=f"NYS Monthly Collections ({sel_nys_year})",
-            labels={'amount': 'Amount ($)', 'record_date': 'Month', 'tax_or_fee': 'Tax or Fee'}
-        )
-        st.plotly_chart(fig_nys, use_container_width=True)
-
-        with st.expander("View Raw NYS Data"):
-            st.dataframe(filtered_nys, use_container_width=True)
-    else:
-        st.info("No NYS records match the current filter selection.")
