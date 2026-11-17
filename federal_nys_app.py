@@ -433,8 +433,14 @@ def render_dashboard_charts(
         )
         fig_fytd_yoy.update_coloraxes(showscale=False)
         st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
+
     with st.expander(f"View Underlying {title_prefix} Data Table"):
-    st.dataframe(series_df.drop(columns=["_calc_f_month_ord", "_calc_fy"]).sort_values("record_date", ascending=False), use_container_width=True)
+        st.dataframe(
+            series_df.drop(columns=["_calc_f_month_ord", "_calc_fy"]).sort_values("record_date", ascending=False),
+            use_container_width=True
+        )
+
+
 # ==============================================================================
 # 3. MAIN TAB NAVIGATION
 # ==============================================================================
@@ -496,8 +502,7 @@ with tab_fed:
         selected_types=selected_receipt_types if selected_receipt_types else all_receipt_types,
         cal_year_col="record_calendar_year",
         cal_month_col="record_calendar_month",
-        fiscal_year_col="record_fiscal_year",
-        fiscal_month_order_col="fiscal_month_order",
+        fy_start_month=10,
         key_prefix="fed",
         title_prefix="Federal"
     )
@@ -559,8 +564,7 @@ with tab_nys:
         selected_types=sel_taxes_fees if sel_taxes_fees else all_taxes_fees,
         cal_year_col="calendar_year",
         cal_month_col="calendar_month_name",
-        fiscal_year_col="nys_fiscal_year",
-        fiscal_month_order_col="month_of_collections_sort_order",
+        fy_start_month=4,
         key_prefix="nys",
         title_prefix="NYS"
     )
