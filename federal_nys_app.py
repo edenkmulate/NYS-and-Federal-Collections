@@ -374,18 +374,18 @@ def render_dashboard_charts(
         st.plotly_chart(fig_cytd_yoy, use_container_width=True, key=f"{key_prefix}_r2_yoy")
 
     st.divider()
- # ==========================================================================
+    # ==========================================================================
     # ROW 3: FISCAL YEAR-TO-DATE (FYTD) LINE CHART & GROWTH RATE BAR CHART
     # ==========================================================================
-    # Find the fiscal year & fiscal month order corresponding to the selected year/month
     ref_rows = series_df[
         (series_df[cal_year_col] == selected_year) & 
         (series_df["month_num"] == target_month_num)
-    ]
+    ].dropna(subset=[fiscal_year_col, fiscal_month_order_col])
     
-    if not ref_rows.empty and fiscal_year_col in series_df.columns and fiscal_month_order_col in series_df.columns:
-        target_fy = int(ref_rows[fiscal_year_col].iloc)
-        target_f_month_ord = int(ref_rows[fiscal_month_order_col].iloc)
+    if not ref_rows.empty:
+        # Use .iloc[0] to extract the scalar value from the Series
+        target_fy = int(ref_rows[fiscal_year_col].iloc[0])
+        target_f_month_ord = int(ref_rows[fiscal_month_order_col].iloc[0])
         
         st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} — {target_month_name} / FY {target_fy})")
         
