@@ -399,10 +399,20 @@ def render_dashboard_charts(
 
     st.divider()
 
+    # Helper to build a light-to-dark gradient map for any list of sorted year strings
+    def build_gradient_map(year_strings, scale_name="Blues"):
+        n = len(year_strings)
+        if n == 1:
+            return {year_strings[0]: pc.sample_colorscale(scale_name, [0.9])[0]}
+        # Sample from 0.22 (soft light shade, clearly visible on white) to 1.0 (darkest)
+        positions = [0.22 + (0.78 * i / (n - 1)) for i in range(n)]
+        colors = pc.sample_colorscale(scale_name, positions)
+        return dict(zip(year_strings, colors))
+
     # ==========================================================================
-    # ROW 2: CALENDAR YEAR-TO-DATE (CYTD) LINE CHART & GROWTH RATE BAR CHART
+    # ROW 2: CALENDAR YEAR-TO-DATE (CYTD) LINE CHART (BLUES) & GROWTH BAR CHART
     # ==========================================================================
-    st.markdown(f"#### Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
+    st.markdown(f"#### 2️⃣ Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
     
     cytd_raw = all_hist_df[all_hist_df["month_num"] <= target_month_num].copy()
     
@@ -416,7 +426,12 @@ def render_dashboard_charts(
         .sort_values([cal_year_col, "month_num"])
     )
     cytd_monthly["cytd_cumulative"] = cytd_monthly.groupby(cal_year_col)["amount"].cumsum()
+    
+    # Sort calendar years ascending so gradient maps oldest -> lightest blue and latest -> darkest blue
+    cytd_years_sorted = sorted(cytd_monthly[cal_year_col].unique())
+    cytd_year_strs = [str(y) for y in cytd_years_sorted]
     cytd_monthly[cal_year_col] = cytd_monthly[cal_year_col].astype(str)
+    cytd_gradient_map = build_gradient_map(cytd_year_strs, scale_name="Blues")
 
     cytd_annual = (
         cytd_raw.groupby(cal_year_col, as_index=False)["amount"]
@@ -438,9 +453,13 @@ def render_dashboard_charts(
             y="cytd_cumulative",
             color=cal_year_col,
             markers=True,
+            color_discrete_map=cytd_gradient_map,
+            category_orders={cal_year_col: cytd_year_strs},
             title=f"{cat_label}: Cumulative Calendar YTD (Thru {target_month_name})",
             labels={"month_num": "Calendar Month (1=Jan)", "cytd_cumulative": "Cumulative YTD ($)", cal_year_col: "Year"}
         )
+        if cytd_year_strs:
+            fig_cytd_line.update_traces(selector=dict(name=cytd_year_strs[-1]), line=dict(width=3.5))
         st.plotly_chart(fig_cytd_line, use_container_width=True, key=f"{key_prefix}_r2_line")
 
     with r2_c2:
@@ -460,12 +479,12 @@ def render_dashboard_charts(
     st.divider()
 
     # ==========================================================================
-    # ROW 3: FISCAL YEAR-TO-DATE (FYTD) LINE CHART & GROWTH RATE BAR CHART
+    # ROW 3: FISCAL YEAR-TO-DATE (FYTD) LINE CHART (REDS) & GROWTH BAR CHART
     # ==========================================================================
     target_f_month_ord = ((target_month_num - fy_start_month) % 12) + 1
     target_fy = int(selected_year + (1 if target_month_num >= fy_start_month else 0))
 
-    st.markdown(f"#### Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
+    st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
     
     fytd_raw = all_hist_df[all_hist_df["_calc_f_month_ord"] <= target_f_month_ord].copy()
     
@@ -482,7 +501,12 @@ def render_dashboard_charts(
         .sort_values(["_calc_fy", "_calc_f_month_ord"])
     )
     fytd_monthly["fytd_cumulative"] = fytd_monthly.groupby("_calc_fy")["amount"].cumsum()
+    
+    # Sort fiscal years ascending so gradient maps oldest -> lightest red and latest -> darkest red
+    fytd_years_sorted = sorted(fytd_monthly["_calc_fy"].unique())
+    fytd_year_strs = [str(y) for y in fytd_years_sorted]
     fytd_monthly["_calc_fy"] = fytd_monthly["_calc_fy"].astype(str)
+    fytd_gradient_map = build_gradient_map(fytd_year_strs, scale_name="Reds")
 
     fytd_annual = (
         fytd_raw.groupby("_calc_fy", as_index=False)["amount"]
@@ -504,6 +528,8 @@ def render_dashboard_charts(
             y="fytd_cumulative",
             color="_calc_fy",
             markers=True,
+            color_discrete_map=fytd_gradient_map,
+            category_orders={"_calc_fy": fytd_year_strs},
             title=f"{cat_label}: Cumulative Fiscal YTD (Thru Fiscal Month {target_f_month_ord})",
             labels={
                 "_calc_f_month_ord": f"Fiscal Month Order (1 = Month {fy_start_month})",
@@ -511,6 +537,8 @@ def render_dashboard_charts(
                 "_calc_fy": "Fiscal Year"
             }
         )
+        if fytd_year_strs:
+            fig_fytd_line.update_traces(selector=dict(name=fytd_year_strs[-1]), line=dict(width=3.5))
         st.plotly_chart(fig_fytd_line, use_container_width=True, key=f"{key_prefix}_r3_line")
 
     with r3_c2:
@@ -526,13 +554,6 @@ def render_dashboard_charts(
         )
         fig_fytd_yoy.update_coloraxes(showscale=False)
         st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
-
-    with st.expander(f"View Underlying {title_prefix} Data Table — {cat_label} ({start_yr}–{end_yr})"):
-        display_df = all_hist_df[
-            (all_hist_df[cal_year_col] >= start_yr) & 
-            (all_hist_df[cal_year_col] <= end_yr)
-        ].drop(columns=["_calc_f_month_ord", "_calc_fy"])
-        st.dataframe(display_df.sort_values("record_date", ascending=False), use_container_width=True)
 
 
 # ==============================================================================
