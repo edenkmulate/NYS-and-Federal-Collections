@@ -302,7 +302,7 @@ def render_dashboard_charts(
     last_4_start = selected_year - 3
     last_4_years = list(range(last_4_start, selected_year + 1))
 
-    st.markdown(f"#### 0️⃣ Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
+    st.markdown(f"#### Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
 
     cluster_df = (
         all_hist_df[all_hist_df[cal_year_col].isin(last_4_years)]
@@ -424,7 +424,7 @@ def render_dashboard_charts(
     # ==========================================================================
     # ROW 2: CALENDAR YEAR-TO-DATE (CYTD) LINE CHART (BLUES) & GROWTH BAR CHART
     # ==========================================================================
-    st.markdown(f"#### 2️⃣ Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
+    st.markdown(f"#### Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
     
     cytd_raw = all_hist_df[all_hist_df["month_num"] <= target_month_num].copy()
     
@@ -496,7 +496,7 @@ def render_dashboard_charts(
     target_f_month_ord = ((target_month_num - fy_start_month) % 12) + 1
     target_fy = int(selected_year + (1 if target_month_num >= fy_start_month else 0))
 
-    st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
+    st.markdown(f"#### Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
     
     fytd_raw = all_hist_df[all_hist_df["_calc_f_month_ord"] <= target_f_month_ord].copy()
     
