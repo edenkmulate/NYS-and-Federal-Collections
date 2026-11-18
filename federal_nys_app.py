@@ -201,7 +201,8 @@ def render_dashboard_charts(
     full_df: pd.DataFrame,
     selected_year: int,
     selected_month: str,
-    year_range: tuple,
+    min_yr: int,
+    max_yr: int,
     category_col: str,
     selected_categories: list,
     type_col: str,
@@ -253,7 +254,7 @@ def render_dashboard_charts(
             st.info(f"No data available for {selected_year}.")
             return
 
-    start_yr, end_yr = year_range
+    
 
     # --------------------------------------------------------------------------
     # KPI SUMMARY ROW
@@ -289,8 +290,8 @@ def render_dashboard_charts(
         value=f"${cytd_curr / 1_000_000:,.1f}M"
     )
     k3.metric(
-        label="Chart Display Window",
-        value=f"{start_yr} – {end_yr}"
+        label="Selected Reference Period",
+        value=f"{target_month_name} {selected_year}"
     )
 
     st.divider()
@@ -301,7 +302,7 @@ def render_dashboard_charts(
     last_4_start = selected_year - 3
     last_4_years = list(range(last_4_start, selected_year + 1))
 
-    st.markdown(f"#### Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
+    st.markdown(f"#### 0️⃣ Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
 
     cluster_df = (
         all_hist_df[all_hist_df[cal_year_col].isin(last_4_years)]
@@ -311,7 +312,6 @@ def render_dashboard_charts(
     )
     cluster_df[cal_year_col] = cluster_df[cal_year_col].astype(str)
 
-    # Ensure x-axis stays strictly in Jan -> Dec chronological order
     month_order = (
         cluster_df[["month_num", cal_month_col]]
         .drop_duplicates()
@@ -319,12 +319,11 @@ def render_dashboard_charts(
         .tolist()
     )
 
-    # Assign progressive light-to-dark greys to prior years and bright blue to the latest year
     grey_shades = ["#D3D3D3", "#B0B0B0", "#888888"]
     year_color_map = {}
     for idx, yr in enumerate(last_4_years[:-1]):
         year_color_map[str(yr)] = grey_shades[idx]
-    year_color_map[str(selected_year)] = "#1f77b4"  # Highlight latest year in bold blue
+    year_color_map[str(selected_year)] = "#1f77b4"
 
     fig_cluster = px.bar(
         cluster_df,
@@ -354,6 +353,18 @@ def render_dashboard_charts(
     st.plotly_chart(fig_cluster, use_container_width=True, key=f"{key_prefix}_r0_cluster")
 
     st.divider()
+
+    # ==========================================================================
+    # HISTORICAL CHART WINDOW SLIDER (Placed directly after the monthly chart)
+    # ==========================================================================
+    default_start = max(min_yr, max_yr - 9)
+    start_yr, end_yr = st.slider(
+        "Historical Chart Window (Years) — Applies to Charts Below",
+        min_value=min_yr,
+        max_value=max_yr,
+        value=(default_start, max_yr),
+        key=f"{key_prefix}_year_window"
+    )
 
     # ==========================================================================
     # ROW 1: HISTORICAL SINGLE-MONTH COLLECTIONS & YOY GROWTH RATE
@@ -413,7 +424,7 @@ def render_dashboard_charts(
     # ==========================================================================
     # ROW 2: CALENDAR YEAR-TO-DATE (CYTD) LINE CHART (BLUES) & GROWTH BAR CHART
     # ==========================================================================
-    st.markdown(f"#### Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
+    st.markdown(f"#### 2️⃣ Calendar Year-to-Date (Jan – {target_month_name}) — {cat_label}")
     
     cytd_raw = all_hist_df[all_hist_df["month_num"] <= target_month_num].copy()
     
@@ -485,7 +496,7 @@ def render_dashboard_charts(
     target_f_month_ord = ((target_month_num - fy_start_month) % 12) + 1
     target_fy = int(selected_year + (1 if target_month_num >= fy_start_month else 0))
 
-    st.markdown(f"#### Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
+    st.markdown(f"#### 3️⃣ Fiscal Year-to-Date (Thru Fiscal Month {target_f_month_ord} / FY {target_fy}) — {cat_label}")
     
     fytd_raw = all_hist_df[all_hist_df["_calc_f_month_ord"] <= target_f_month_ord].copy()
     
