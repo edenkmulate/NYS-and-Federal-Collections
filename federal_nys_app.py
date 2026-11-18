@@ -295,6 +295,58 @@ def render_dashboard_charts(
     st.divider()
 
     # ==========================================================================
+    # ROW 0: CLUSTERED COLUMN CHART - MONTHLY COLLECTIONS (LAST 4 CALENDAR YEARS)
+    # ==========================================================================
+    last_4_start = selected_year - 3
+    last_4_years = list(range(last_4_start, selected_year + 1))
+
+    st.markdown(f"#### 0️⃣ Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
+
+    cluster_df = (
+        all_hist_df[all_hist_df[cal_year_col].isin(last_4_years)]
+        .groupby([cal_year_col, "month_num", cal_month_col], as_index=False)["amount"]
+        .sum()
+        .sort_values(["month_num", cal_year_col])
+    )
+    cluster_df[cal_year_col] = cluster_df[cal_year_col].astype(str)
+
+    # Ensure x-axis stays strictly in Jan -> Dec chronological order
+    month_order = (
+        cluster_df[["month_num", cal_month_col]]
+        .drop_duplicates()
+        .sort_values("month_num")[cal_month_col]
+        .tolist()
+    )
+
+    fig_cluster = px.bar(
+        cluster_df,
+        x=cal_month_col,
+        y="amount",
+        color=cal_year_col,
+        barmode="group",  # Creates clustered columns side-by-side per month
+        category_orders={
+            cal_month_col: month_order,
+            cal_year_col: [str(y) for y in last_4_years]
+        },
+        title=f"{cat_label}: Monthly Collections by Calendar Year ({last_4_start}–{selected_year})",
+        labels={
+            cal_month_col: "Calendar Month",
+            "amount": "Collections ($)",
+            cal_year_col: "Calendar Year"
+        }
+    )
+    fig_cluster.update_layout(
+        xaxis_title="Calendar Month",
+        yaxis_title="Collections ($)",
+        legend_title="Calendar Year",
+        bargap=0.18,
+        bargroupgap=0.05
+    )
+    st.plotly_chart(fig_cluster, use_container_width=True, key=f"{key_prefix}_r0_cluster")
+
+    st.divider()
+
+    # ==========================================================================
     # ROW 1: HISTORICAL SINGLE-MONTH COLLECTIONS & YOY GROWTH RATE
     # ==========================================================================
     st.markdown(f"#### Historical {target_month_name} Collections & YoY Growth — {cat_label}")
