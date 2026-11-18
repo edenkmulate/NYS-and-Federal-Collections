@@ -600,7 +600,7 @@ with tab_fed:
         selected_month = st.selectbox("Select Reference Month", options=month_options, index=0, key="fed_month")
 
     all_classifications = sorted(df['classification_desc'].dropna().unique().tolist())
-    class_default = ["Corporation Income Taxes"] if "Corporation Income Taxes" in all_classifications else ([all_classifications[0]] if all_classifications else [])
+    class_default = ["Corporation Income Taxes"] if "Corporation Income Taxes" in all_classifications else ([all_classifications] if all_classifications else [])
 
     with f_col3:
         selected_classifications = st.multiselect(
@@ -620,16 +620,6 @@ with tab_fed:
             default=receipt_default,
             key="fed_rcpt"
         )
-
-    # Historical Lookback Window Slider (Defaults to past 10 years)
-    default_fed_start = max(min_fed_yr, max_fed_yr - 9)
-    fed_year_range = st.slider(
-        "Historical Chart Window (Years)",
-        min_value=min_fed_yr,
-        max_value=max_fed_yr,
-        value=(default_fed_start, max_fed_yr),
-        key="fed_year_window"
-    )
 
     render_dashboard_charts(
         full_df=df,
@@ -686,16 +676,6 @@ with tab_nys:
             default=default_fee,
             key="nys_tax_fee"
         )
-
-    # Historical Lookback Window Slider (Defaults to past 10 years, expandable to 1996/1997)
-    default_nys_start = max(min_nys_yr, max_nys_yr - 9)
-    nys_year_range = st.slider(
-        "Historical Chart Window (Years)",
-        min_value=min_nys_yr,
-        max_value=max_nys_yr,
-        value=(default_nys_start, max_nys_yr),
-        key="nys_year_window"
-    )
 
     render_dashboard_charts(
         full_df=nys_df,
