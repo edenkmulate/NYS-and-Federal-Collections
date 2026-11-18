@@ -300,7 +300,7 @@ def render_dashboard_charts(
     last_4_start = selected_year - 3
     last_4_years = list(range(last_4_start, selected_year + 1))
 
-    st.markdown(f"#### 0️⃣ Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
+    st.markdown(f"#### Monthly Collections Comparison ({last_4_start}–{selected_year}) — {cat_label}")
 
     cluster_df = (
         all_hist_df[all_hist_df[cal_year_col].isin(last_4_years)]
@@ -318,12 +318,20 @@ def render_dashboard_charts(
         .tolist()
     )
 
+    # Assign progressive light-to-dark greys to prior years and bright blue to the latest year
+    grey_shades = ["#D3D3D3", "#B0B0B0", "#888888"]
+    year_color_map = {}
+    for idx, yr in enumerate(last_4_years[:-1]):
+        year_color_map[str(yr)] = grey_shades[idx]
+    year_color_map[str(selected_year)] = "#1f77b4"  # Highlight latest year in bold blue
+
     fig_cluster = px.bar(
         cluster_df,
         x=cal_month_col,
         y="amount",
         color=cal_year_col,
-        barmode="group",  # Creates clustered columns side-by-side per month
+        barmode="group",
+        color_discrete_map=year_color_map,
         category_orders={
             cal_month_col: month_order,
             cal_year_col: [str(y) for y in last_4_years]
