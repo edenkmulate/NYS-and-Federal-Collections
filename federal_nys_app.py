@@ -566,7 +566,28 @@ def render_dashboard_charts(
         )
         fig_fytd_yoy.update_coloraxes(showscale=False)
         st.plotly_chart(fig_fytd_yoy, use_container_width=True, key=f"{key_prefix}_r3_yoy")
-
+ # ⬇️ ADD / REPLACE THIS BLOCK AT THE VERY BOTTOM OF render_dashboard_charts() ⬇️
+    with st.expander(f"View & Download Underlying {title_prefix} Data Table — {cat_label} ({start_yr}–{end_yr})"):
+        display_df = (
+            all_hist_df[
+                (all_hist_df[cal_year_col] >= start_yr) & 
+                (all_hist_df[cal_year_col] <= end_yr)
+            ]
+            .drop(columns=["_calc_f_month_ord", "_calc_fy"])
+            .sort_values("record_date", ascending=False)
+        )
+        
+        csv_data = display_df.to_csv(index=False).encode("utf-8")
+        
+        st.download_button(
+            label=f"📥 Download {title_prefix} Data as CSV ({len(display_df):,} rows)",
+            data=csv_data,
+            file_name=f"{key_prefix}_collections_{start_yr}_{end_yr}.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_download_csv"
+        )
+        
+        st.dataframe(display_df, use_container_width=True)
 
 # ==============================================================================
 # 3. MAIN TAB NAVIGATION
